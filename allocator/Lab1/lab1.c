@@ -25,7 +25,7 @@ struct blocHeader {
 //#pragma pack(pop)
 
 const size_t sizeOfHeader = sizeof(struct blocHeader);
-struct blocHeader *lastBloc = NULL;
+
 //////////MAYBE DELETE///////////////
 // void mem_alloc_init () {
 // 	lastValidAddress = sbrk(0);
@@ -36,6 +36,7 @@ struct blocHeader *lastBloc = NULL;
 void *mem_alloc (int numbytes) {
 	//Ініціалізація алокатора
 	static short int hasInitialized = 0;
+	static struct blocHeader *lastBloc = NULL;
 	if (!hasInitialized) {
 		lastValidAddress = sbrk(0);
 		managedMemoryStart = lastValidAddress;
@@ -43,49 +44,74 @@ void *mem_alloc (int numbytes) {
 	}
 
 	void *currentLocation = managedMemoryStart;
-	struct blocHeader *current;
+	struct blocHeader *current = (struct blocHeader*)currentLocation;
 	void *memoryLocation = NULL; //return value
-	//static struct blocHeader *lastBloc = NULL;
 
 	numbytes += sizeOfHeader;
 	//currentLocation = managedMemoryStart;
 	while (currentLocation != lastValidAddress) {
 		current = (struct blocHeader*)currentLocation;
-	 	if (current->isOccupied == 0) { 		
-	 		if (current->size >= numbytes) {
-	 			struct blocHeader *rest = (struct blocHeader*)(currentLocation + numbytes);
-	 			rest->isOccupied = 0;
-	 			rest->size = current->size - numbytes;
-	 			rest->prevSize = numbytes;
-	 			struct blocHeader *next = (struct blocHeader*)(currentLocation + current->size);
-	 			//враховуємо, що наш блок може бути останнім, і після нього ніякого next немає
-	 			if (next != lastValidAddress) 
+	 	if (current->isOccupied == 0 && current->size >= numbytes) { 		
+	 		struct blocHeader *rest = (struct blocHeader*)(currentLocation + numbytes);
+	 		rest->isOccupied = 0;
+	 		rest->size = current->size - numbytes;
+	 		rest->prevSize = numbytes;
+	 		struct blocHeader *next = (struct blocHeader*)(currentLocation + current->size);
+	 		//враховуємо, що наш блок може бути останнім, і після нього ніякого next немає
+	 		if (next != lastValidAddress) {
+	 			if (next->isOccupied = 1)
 	 				next->prevSize = rest->size;
-	 			current->isOccupied = 1;
-	 			current->size = numbytes;
-	 			memoryLocation = currentLocation;
-	 			break;
+	 			else
+	 				rest->size += next->size;
 	 		}
+	 		current->isOccupied = 1;
+	 		current->size = numbytes;
+	 		memoryLocation = currentLocation;
+	 		break;
 	 	}
 	 	currentLocation += current->size;
 	 }
-	 if (!memoryLocation) {
-	 	//if (current != NULL && current->isOccupied == 1){
-	 		if ((int)sbrk(numbytes) == -1)
-	 			return NULL;
-	 		memoryLocation = lastValidAddress;
-	 		lastValidAddress += numbytes;
-	 		current = memoryLocation;
-	 		current->size = numbytes;
-	 		current->isOccupied = 1;
-	 		if (lastBloc) current->prevSize = lastBloc->size;
-	 	}
-	 
-	 //currentHeader->prev = lastBloc;
-	 //************Check**************
-	 lastBloc = (struct blocHeader*)memoryLocation;
-	 memoryLocation += sizeOfHeader;
-	 return memoryLocation;
+	//Якщо серед наявних блоків немає такого, що підходить, 
+	//алокуємо його шляхом розширення буфера: 
+	if (!memoryLocation) {
+		//1) Новий блок буде алокований у кінці буфера
+	 	if (lastBloc) {
+	 		if (current->isOccupied == 1){
+	 			if ((int)sbrk(numbytes) == -1)
+	 				return NULL;
+	 			current = (struct blocHeader*)lastValidAddress;
+	 			lastValidAddress += numbytes;
+	 			current->isOccupied = 1;
+	 			current->size = numbytes;
+	 			current->prevSize = lastBloc->size;
+	 			lastBloc = current;
+	 		}
+	 		//2) Якщо останній блок у буфері вільний але замалий, 
+	 		//розширемо його і повернемо вказівник на нього
+	 		else {
+				int diff = numbytes - current->size;
+	 			if ((int)sbrk(diff) == -1)
+	 				return NULL;
+	 			lastValidAddress += diff;
+	 			current->isOccupied = 1;
+	 			current->size += diff;
+			}
+			memoryLocation = (void*)current;
+		}
+		//3) Це перший виклик алокатора і новий блок буде знаходитись на початку буфера
+		else {
+			if ((int)sbrk(numbytes) == -1)
+				return NULL;
+			memoryLocation = managedMemoryStart;
+			lastValidAddress += numbytes;
+			current->isOccupied = 1;
+			current->size = numbytes;
+			current->prevSize = 0;
+			lastBloc = current;
+		}
+		memoryLocation += sizeOfHeader;
+	 	return memoryLocation;
+	}
 }
 
 void mem_free (void *bloc) {
@@ -93,26 +119,28 @@ void mem_free (void *bloc) {
 	current = bloc - sizeOfHeader;
 	//currentHeader->size = abs(currentHeader->size);
 	//current->isOccupied = 0;
-
-	struct blocHeader *next, *prev, *afterNext;
+	if (current->isOccupied){
+		struct blocHeader *next, *prev, *afterNext;
 	//struct blocHeader *prev;
-	prev = (struct blocHeader*)((void*)current - current->prevSize);
-	next = (struct blocHeader*)((void*)current + current->size);
-	afterNext = NULL;
-	if (next->isOccupied == 0) {
-		afterNext = (struct blocHeader*)((void*)next + next->size);
-		current->size += next->size;
-		afterNext->prevSize = current->size;
+		prev = (struct blocHeader*)((void*)current - current->prevSize);
+		next = (struct blocHeader*)((void*)current + current->size);
+		afterNext = NULL;
+		if ((void*)next != lastValidAddress && next->isOccupied == 0) {
+			afterNext = (struct blocHeader*)((void*)next + next->size);
+			current->size += next->size;
+			if ((void*)afterNext != lastValidAddress)
+				afterNext->prevSize = current->size;
+		}
+		if (prev->isOccupied == 0) {
+			//current->prev->size += currentHeader->size;
+			prev->size += current->size;
+			if (afterNext) 
+				afterNext->prevSize = prev->size;
+			else
+				next->prevSize = prev->size;
+		}
+		current->isOccupied = 0;
 	}
-	if (prev->isOccupied == 0) {
-		//current->prev->size += currentHeader->size;
-		prev->size += current->size;
-		if (afterNext) 
-			afterNext->prevSize = prev->size;
-		else
-			next->prevSize = prev->size;
-	}
-	current->isOccupied = 0;
 }
 
 void *mem_realloc (void *bloc, int newsize) {
@@ -123,13 +151,6 @@ void *mem_realloc (void *bloc, int newsize) {
 	struct blocHeader *header;
 	header = (struct blocHeader*)(bloc - sizeOfHeader);
 	int diff = newsize - header->size;
-	if ((void*)header + header->size == lastValidAddress && diff >= 0) {
-		//if ((int)sbrk(diff) == -1)
-		//	return NULL;
-		sbrk(diff);
-		header->size += diff;
-		return bloc;
-	}
 	if (diff < 0) {
 		struct blocHeader *rest, *next;
 		rest = (struct blocHeader*)((void*)header + newsize);
@@ -137,15 +158,23 @@ void *mem_realloc (void *bloc, int newsize) {
 		rest->isOccupied = 0;
 		rest->prevSize = newsize;
 		if (next != lastValidAddress && next->isOccupied == 1) {
-			rest->size = abs(diff);
+			rest->size = -diff;
 			next->prevSize = rest->size;
 		}
 		else {
-			rest->size = abs(diff) + next->size;	
+			rest->size = -diff + next->size;	
 		}
 		header->size = newsize;
 		return bloc;
 	}
+	if ((void*)header + header->size == lastValidAddress) {
+		if ((int)sbrk(diff) == -1)
+			return NULL;
+		//sbrk(diff);
+		header->size += diff;
+		return bloc;
+	}
+	
 	newsize -= sizeOfHeader;
 	void *dest = mem_alloc(newsize);
 	memcpy(bloc, dest, header->size - sizeOfHeader);
