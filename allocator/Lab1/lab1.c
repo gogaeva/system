@@ -25,7 +25,7 @@ struct blocHeader {
 //#pragma pack(pop)
 
 const size_t sizeOfHeader = sizeof(struct blocHeader);
-
+struct blocHeader *lastBloc = NULL;
 //////////MAYBE DELETE///////////////
 // void mem_alloc_init () {
 // 	lastValidAddress = sbrk(0);
@@ -36,7 +36,7 @@ const size_t sizeOfHeader = sizeof(struct blocHeader);
 void *mem_alloc (int numbytes) {
 	//Ініціалізація алокатора
 	static short int hasInitialized = 0;
-	static struct blocHeader *lastBloc = NULL;
+	//static struct blocHeader *lastBloc = NULL;
 	if (!hasInitialized) {
 		lastValidAddress = sbrk(0);
 		managedMemoryStart = lastValidAddress;
@@ -89,6 +89,7 @@ void *mem_alloc (int numbytes) {
 	 		//2) Якщо останній блок у буфері вільний але замалий, 
 	 		//розширемо його і повернемо вказівник на нього
 	 		else {
+	 			numbytes -= sizeOfHeader;
 				int diff = numbytes - current->size;
 	 			if ((int)sbrk(diff) == -1)
 	 				return NULL;
@@ -109,9 +110,9 @@ void *mem_alloc (int numbytes) {
 			current->prevSize = 0;
 			lastBloc = current;
 		}
-		memoryLocation += sizeOfHeader;
-	 	return memoryLocation;
 	}
+	memoryLocation += sizeOfHeader;
+	return memoryLocation;
 }
 
 void mem_free (void *bloc) {
@@ -158,24 +159,33 @@ void *mem_realloc (void *bloc, int newsize) {
 		rest->isOccupied = 0;
 		rest->prevSize = newsize;
 		if (next != lastValidAddress && next->isOccupied == 1) {
+			//rest->size = -diff;
 			rest->size = -diff;
 			next->prevSize = rest->size;
 		}
-		else {
+		else if (next != lastValidAddress && next->isOccupied == 0) {
 			rest->size = -diff + next->size;	
+		}
+		else {
+			rest->size = -diff + next->size;
+			lastBloc = rest;
 		}
 		header->size = newsize;
 		return bloc;
 	}
 	if ((void*)header + header->size == lastValidAddress) {
+		//diff -= sizeOfHeader;
 		if ((int)sbrk(diff) == -1)
 			return NULL;
 		//sbrk(diff);
 		header->size += diff;
+		lastValidAddress += diff;
 		return bloc;
 	}
-	
-	newsize -= sizeOfHeader;
+	//next = (struct blocHeader*)((void*)header + header->size);
+	//if (next->isOccupied == 0 && next->size >= newsize) {
+
+	//}
 	void *dest = mem_alloc(newsize);
 	memcpy(bloc, dest, header->size - sizeOfHeader);
 	mem_free(bloc);
